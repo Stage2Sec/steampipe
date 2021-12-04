@@ -70,5 +70,4 @@ func GetPreparedStatementsSQL(resourceMaps *modconfig.WorkspaceResourceMaps) map
 	}
 
 	return sqlMap
-
 }
