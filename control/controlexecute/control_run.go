@@ -125,26 +125,6 @@ func (r *ControlRun) setSearchPath(ctx context.Context, session *db_common.Datab
 	return err
 }
 
-func (r *ControlRun) getCurrentSearchPath(ctx context.Context, session *db_common.DatabaseSession) ([]string, error) {
-	utils.LogTime("ControlRun.getCurrentSearchPath start")
-	defer utils.LogTime("ControlRun.getCurrentSearchPath end")
-
-	row := session.Connection.QueryRowContext(ctx, "show search_path")
-	pathAsString := ""
-	err := row.Scan(&pathAsString)
-	if err != nil {
-		return nil, err
-	}
-	currentSearchPath := strings.Split(pathAsString, ",")
-	// unescape search path
-	for idx, p := range currentSearchPath {
-		p = strings.Join(strings.Split(p, "\""), "")
-		p = strings.TrimSpace(p)
-		currentSearchPath[idx] = p
-	}
-	return currentSearchPath, nil
-}
-
 func (r *ControlRun) Execute(ctx context.Context, client db_common.Client) {
 	log.Printf("[TRACE] begin ControlRun.Start: %s\n", r.Control.Name())
 	defer log.Printf("[TRACE] end ControlRun.Start: %s\n", r.Control.Name())
@@ -246,11 +226,57 @@ func (r *ControlRun) Execute(ctx context.Context, client db_common.Client) {
 	log.Printf("[TRACE] finish result for, %s\n", control.Name())
 }
 
+func (r *ControlRun) SetError(err error) {
+	if err == nil {
+		return
+	}
+	r.runError = utils.TransformErrorToSteampipe(err)
+
+	// update error count
+	r.Summary.Error++
+	r.setRunStatus(ControlRunError)
+}
+
+func (r *ControlRun) GetError() error {
+	return r.runError
+}
+
+func (r *ControlRun) getCurrentSearchPath(ctx context.Context, session *db_common.DatabaseSession) ([]string, error) {
+	utils.LogTime("ControlRun.getCurrentSearchPath start")
+	defer utils.LogTime("ControlRun.getCurrentSearchPath end")
+
+	row := session.Connection.QueryRowContext(ctx, "show search_path")
+	pathAsString := ""
+	err := row.Scan(&pathAsString)
+	if err != nil {
+		return nil, err
+	}
+	currentSearchPath := strings.Split(pathAsString, ",")
+	// unescape search path
+	for idx, p := range currentSearchPath {
+		p = strings.Join(strings.Split(p, "\""), "")
+		p = strings.TrimSpace(p)
+		currentSearchPath[idx] = p
+	}
+	return currentSearchPath, nil
+}
+
 func (r *ControlRun) getControlQueryContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	// create a context with a deadline
 	shouldBeDoneBy := time.Now().Add(controlQueryTimeout)
 	ctxWithDeadline, cancel := context.WithDeadline(ctx, shouldBeDoneBy)
 	return ctxWithDeadline, cancel
+}
+
+func (r *ControlRun) GetRunStatus() ControlRunStatus {
+	r.stateLock.Lock()
+	defer r.stateLock.Unlock()
+	return r.runStatus
+}
+
+func (r *ControlRun) Finished() bool {
+	status := r.GetRunStatus()
+	return status == ControlRunComplete || status == ControlRunError
 }
 
 func (r *ControlRun) resolveControlQuery(control *modconfig.Control) (string, error) {
@@ -344,21 +370,6 @@ func (r *ControlRun) createdOrderedResultRows() {
 	}
 }
 
-func (r *ControlRun) SetError(err error) {
-	if err == nil {
-		return
-	}
-	r.runError = utils.TransformErrorToSteampipe(err)
-
-	// update error count
-	r.Summary.Error++
-	r.setRunStatus(ControlRunError)
-}
-
-func (r *ControlRun) GetError() error {
-	return r.runError
-}
-
 func (r *ControlRun) setRunStatus(status ControlRunStatus) {
 	r.stateLock.Lock()
 	r.runStatus = status
@@ -375,15 +386,4 @@ func (r *ControlRun) setRunStatus(status ControlRunStatus) {
 		// TODO CANCEL QUERY IF NEEDED
 		r.doneChan <- true
 	}
-}
-
-func (r *ControlRun) GetRunStatus() ControlRunStatus {
-	r.stateLock.Lock()
-	defer r.stateLock.Unlock()
-	return r.runStatus
-}
-
-func (r *ControlRun) Finished() bool {
-	status := r.GetRunStatus()
-	return status == ControlRunComplete || status == ControlRunError
 }
